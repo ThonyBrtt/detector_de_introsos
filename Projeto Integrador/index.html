@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinela · 2 Zonas</title>
+<meta name="description" content="Painel em tempo real do sistema Sentinela: ESP32, dois sensores PIR, Telegram e Firebase.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%2314161f%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%276%27 fill=%27none%27 stroke=%27%238b9cff%27 stroke-width=%273%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%272%27 fill=%27%238b9cff%27/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>Sentinela <span>· 2 zonas</span></h1>
+      <p>Residência, andar térreo · ESP32 + 2 sensores PIR</p>
+    </div>
+    <div class="conn" id="conn" role="status"><span class="dot"></span><span id="connTxt">Conectando…</span></div>
+  </header>
+
+  <section class="state" id="state" data-s="offline" aria-live="polite">
+    <div>
+      <div class="label">Situação do sistema</div>
+      <div class="word" id="word">—</div>
+      <p class="sub" id="sub"></p>
+    </div>
+    <div class="actions">
+      <button class="primary" id="btnArmar" type="button">Armar</button>
+      <button id="btnDesarmar" type="button">Desarmar</button>
+    </div>
+  </section>
+
+  <section class="zones" aria-label="Zonas monitoradas">
+    <article class="zone" id="zoneA" data-m="0" data-hit="0">
+      <div class="zh"><h2>Zona A · Entrada</h2><span class="pin mono">GPIO 32</span></div>
+      <div class="status"><span class="radar"><i></i></span><span class="txt" id="txtA">—</span></div>
+      <div class="cnt"><span>Intrusões nesta zona</span><b id="ocA">0</b></div>
+    </article>
+    <article class="zone" id="zoneB" data-m="0" data-hit="0">
+      <div class="zh"><h2>Zona B · Corredor</h2><span class="pin mono">GPIO 33</span></div>
+      <div class="status"><span class="radar"><i></i></span><span class="txt" id="txtB">—</span></div>
+      <div class="cnt"><span>Intrusões nesta zona</span><b id="ocB">0</b></div>
+    </article>
+  </section>
+
+  <section class="stats" aria-label="Resumo">
+    <div class="stat"><h3>Total de intrusões</h3><div class="v" id="oc">0</div></div>
+    <div class="stat"><h3>Sinal Wi-Fi</h3><div class="v"><span class="bars" id="bars"><i></i><i></i><i></i><i></i></span><span id="rssi">—</span></div></div>
+    <div class="stat"><h3>Tempo ligado</h3><div class="v" id="up">—</div></div>
+  </section>
+
+  <section class="log" aria-label="Histórico de eventos">
+    <header>
+      <h2>Histórico</h2>
+      <div class="r">
+        <span id="logN"></span>
+        <label class="sr" for="filtro" style="position:absolute;left:-9999px">Filtrar por zona</label>
+        <select id="filtro">
+          <option value="">Todas as zonas</option>
+          <option value="ENTRADA">Só Entrada</option>
+          <option value="CORREDOR">Só Corredor</option>
+        </select>
+      </div>
+    </header>
+    <ul id="events"></ul>
+  </section>
+
+  <aside class="banner" id="banner" hidden>
+    <p><strong>Modo demonstração.</strong> Os dados são simulados. Para ver o sistema de verdade, preencha <code>FIREBASE_URL</code> no início do script do <code>index.html</code>.</p>
+  </aside>
+
+  <footer class="foot">Projeto acadêmico · ESP32 + Wokwi + Telegram + Firebase</footer>
+</div>
+
+<script>
+
+const CONFIG = { FIREBASE_URL: "https://projeto-integrador-882fe-default-rtdb.firebaseio.com" };
+
+const RAIZ = "/sentinela";
+const POLL_MS = 1000;
+const ONLINE_MS = 15000;
+const $ = (id) => document.getElementById(id);
+
+let demo = false;
+let S = { armado: false, alarme: false, zonaAlarme: "", entrada: false, corredor: false, ocEntrada: 0, ocCorredor: 0, rssi: null, uptime: 0, ocorrencias: 0, ts: 0 };
+let EV = [];
+let pending = null;
+let online = false;
+
+function baseUrl() {
+  let u = CONFIG.FIREBASE_URL;
+  if (u.includes("https://projeto-integrador-882fe-default-rtdb.firebaseio.com")) u = "";   // ainda não preenchido: cai no modo demonstração
+  return (u || "").trim().replace(/\/+$/, "");
+}
+
+const pad = (n) => String(n).padStart(2, "0");
+function fmtUp(s) { s = Math.max(0, Math.floor(s || 0)); return pad(Math.floor(s / 3600)) + ":" + pad(Math.floor(s / 60) % 60) + ":" + pad(s % 60); }
+function fmtClock(ts) { const d = new Date(ts); return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()); }
+function ago(ts) {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 5) return "agora";
+  if (s < 60) return "há " + s + " s";
+  if (s < 3600) return "há " + Math.floor(s / 60) + " min";
+  return "há " + Math.floor(s / 3600) + " h";
+}
+const ZONAS = { ENTRADA: "Entrada", CORREDOR: "Corredor" };
+const TIPOS = {
+  INTRUSAO: { txt: "Intrusão detectada", cls: "crit" },
+  ARMADO: { txt: "Sistema armado", cls: "warn" },
+  DESARMADO: { txt: "Sistema desarmado", cls: "ok" }
+};
+
+function renderZona(sufixo, mov, oc, hit) {
+  const z = $("zone" + sufixo);
+  z.dataset.m = online && mov ? "1" : "0";
+  z.dataset.hit = online && hit ? "1" : "0";
+  $("txt" + sufixo).textContent = !online ? "—" : mov ? "Movimento" : "Livre";
+  $("oc" + sufixo).textContent = oc || 0;
+}
+
+function render() {
+  const st = $("state");
+  let s = "offline", word = "Sem conexão", sub = "O sistema não envia dados há mais de 15 segundos.";
+  if (online) {
+    if (S.alarme) {
+      s = "alarme"; word = "Alarme";
+      sub = "Movimento na zona " + (ZONAS[S.zonaAlarme] || "monitorada") + " com o sistema armado.";
+    } else if (S.armado) { s = "armado"; word = "Armado"; sub = "Monitorando Entrada e Corredor."; }
+    else { s = "desarmado"; word = "Desarmado"; sub = "Movimentos são ignorados e nenhum alerta é enviado."; }
+  }
+  st.dataset.s = s;
+  document.title = s === "alarme" ? "ALARME · Sentinela" : "Sentinela · 2 Zonas";
+  $("word").textContent = word;
+  $("sub").textContent = pending ? "Comando enviado. Aguardando o sistema…" : sub;
+
+  $("conn").className = "conn " + (online ? "on" : "off");
+  $("connTxt").textContent = demo ? "Demonstração" : online ? "Sistema online · " + ago(S.ts) : "Sistema offline";
+
+  $("btnArmar").disabled = !online || !!pending || S.armado;
+  $("btnDesarmar").disabled = !online || !!pending || !S.armado;
+
+  renderZona("A", S.entrada, S.ocEntrada, S.alarme && S.zonaAlarme === "ENTRADA");
+  renderZona("B", S.corredor, S.ocCorredor, S.alarme && S.zonaAlarme === "CORREDOR");
+  $("oc").textContent = S.ocorrencias || 0;
+
+  const r = S.rssi;
+  $("rssi").textContent = r == null ? "—" : r + " dBm";
+  const lvl = r == null ? 0 : r >= -55 ? 4 : r >= -65 ? 3 : r >= -75 ? 2 : 1;
+  [...$("bars").children].forEach((b, i) => b.classList.toggle("on", i < lvl));
+  $("up").textContent = online ? fmtUp(S.uptime) : "—";
+
+  const f = $("filtro").value;
+  const lista = f ? EV.filter((e) => e.zona === f) : EV;
+  const ul = $("events");
+  $("logN").textContent = lista.length ? lista.length + " eventos" : "";
+  if (!lista.length) { ul.innerHTML = '<li class="empty">Nenhum evento ainda. Arme o sistema e acione um sensor PIR.</li>'; return; }
+  ul.innerHTML = lista.map((e) => {
+    const t = TIPOS[e.tipo] || { txt: e.tipo, cls: "mute" };
+    const zona = e.zona ? '<span class="pill mute">' + (ZONAS[e.zona] || e.zona) + "</span>" : "";
+    return '<li><span class="when mono">' + fmtClock(e.ts) + '</span><span><span class="pill ' + t.cls + '">' + (e.tipo || "") + "</span></span>" +
+      "<span>" + zona + "</span>" +
+      '<span class="what">' + t.txt + (e.tipo === "INTRUSAO" && e.ocorrencias ? " (nº " + e.ocorrencias + ")" : "") + "</span>" +
+      '<span class="up mono">' + ago(e.ts) + "</span></li>";
+  }).join("");
+}
+
+/* ---------- Firebase (REST) ---------- */
+async function pull() {
+  const b = baseUrl();
+  try {
+    const [est, evs] = await Promise.all([
+      fetch(b + RAIZ + "/estado.json").then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+      fetch(b + RAIZ + "/eventos.json?orderBy=" + encodeURIComponent('"$key"') + "&limitToLast=40").then((r) => r.json())
+    ]);
+    if (est) {
+      S = { armado: !!est.armado, alarme: !!est.alarme, zonaAlarme: est.zonaAlarme || "", entrada: !!est.entrada, corredor: !!est.corredor,
+            ocEntrada: est.ocEntrada || 0, ocCorredor: est.ocCorredor || 0, rssi: est.rssi ?? null,
+            uptime: est.uptime || 0, ocorrencias: est.ocorrencias || 0, ts: est.atualizadoEm || 0 };
+      online = Date.now() - S.ts < ONLINE_MS;
+      if (pending && S.armado === pending.alvo) pending = null;
+      if (pending && Date.now() - pending.t > 10000) pending = null;
+    } else { online = false; }
+    EV = evs && typeof evs === "object" ? Object.values(evs).sort((a, b) => b.ts - a.ts) : [];
+  } catch (e) { online = false; }
+  render();
+}
+
+async function enviarComando(cmd) {
+  if (demo) { demoSet(cmd === "armar"); return; }
+  pending = { alvo: cmd === "armar", t: Date.now() };
+  render();
+  try {
+    await fetch(baseUrl() + RAIZ + "/comando.json", { method: "PUT", body: JSON.stringify(cmd) });
+  } catch (e) { pending = null; }
+  render();
+}
+
+/* ---------- modo demonstração ---------- */
+function demoPush(tipo, zona) {
+  EV.unshift({ tipo, zona: zona || "", ts: Date.now(), ocorrencias: S.ocorrencias });
+  EV = EV.slice(0, 40);
+}
+function demoSet(arm) {
+  S.armado = arm; S.alarme = false; S.zonaAlarme = ""; S.entrada = false; S.corredor = false; S.ts = Date.now();
+  demoPush(arm ? "ARMADO" : "DESARMADO");
+  render();
+}
+function startDemo() {
+  demo = true; online = true;
+  const now = Date.now();
+  S = { armado: true, alarme: false, zonaAlarme: "", entrada: false, corredor: false, ocEntrada: 2, ocCorredor: 1, rssi: -58, uptime: 1394, ocorrencias: 3, ts: now };
+  EV = [
+    { tipo: "INTRUSAO", zona: "CORREDOR", ts: now - 71000, ocorrencias: 3 },
+    { tipo: "INTRUSAO", zona: "ENTRADA", ts: now - 188000, ocorrencias: 2 },
+    { tipo: "ARMADO", zona: "", ts: now - 241000 },
+    { tipo: "DESARMADO", zona: "", ts: now - 602000 },
+    { tipo: "INTRUSAO", zona: "ENTRADA", ts: now - 733000, ocorrencias: 1 },
+    { tipo: "ARMADO", zona: "", ts: now - 810000 }
+  ];
+  $("banner").hidden = false;
+  let alarmeAte = 0;
+  setInterval(() => {
+    S.uptime++; S.ts = Date.now();
+    S.rssi = -58 + Math.round(Math.sin(S.uptime / 7) * 4);
+    if (S.alarme && Date.now() > alarmeAte) { S.alarme = false; S.zonaAlarme = ""; S.entrada = false; S.corredor = false; }
+    if (S.armado && !S.alarme && Math.random() < 0.07) {
+      const z = Math.random() < 0.5 ? "ENTRADA" : "CORREDOR";
+      S.alarme = true; S.zonaAlarme = z; S.ocorrencias++; alarmeAte = Date.now() + 6000;
+      if (z === "ENTRADA") { S.entrada = true; S.ocEntrada++; } else { S.corredor = true; S.ocCorredor++; }
+      demoPush("INTRUSAO", z);
+    }
+    render();
+  }, 1000);
+  render();
+}
+
+/* ---------- início ---------- */
+$("btnArmar").addEventListener("click", () => enviarComando("armar"));
+$("btnDesarmar").addEventListener("click", () => enviarComando("desarmar"));
+$("filtro").addEventListener("change", render);
+
+if (baseUrl()) { pull(); setInterval(pull, POLL_MS); }
+else { startDemo(); }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "author": "Sentinela - 2 zonas",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+
+    { "type": "wokwi-pir-motion-sensor", "id": "pirA", "top": -135, "left": 150, "attrs": {} },
+    { "type": "wokwi-pir-motion-sensor", "id": "pirB", "top": -135, "left": 290, "attrs": {} },
+
+    { "type": "wokwi-led", "id": "ledVerde", "top": -140, "left": -95, "attrs": { "color": "limegreen", "label": "DESARMADO" } },
+    { "type": "wokwi-led", "id": "ledVermelho", "top": -140, "left": -35, "attrs": { "color": "red", "label": "ARMADO" } },
+    { "type": "wokwi-resistor", "id": "rVerde", "top": -65, "left": -100, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "rVermelho", "top": -65, "left": -40, "rotate": 90, "attrs": { "value": "220" } },
+
+    { "type": "wokwi-buzzer", "id": "buzzer", "top": 90, "left": -150, "attrs": { "volume": "0.1" } },
+
+    { "type": "wokwi-pushbutton", "id": "botao", "top": 200, "left": 160, "attrs": { "color": "blue", "label": "ARMAR" } }
+  ],
+  "connections": [
+    ["esp:TX", "$serialMonitor:RX", "", []],
+    ["esp:RX", "$serialMonitor:TX", "", []],
+
+    ["pirA:VCC", "esp:3V3", "red", []],
+    ["pirA:GND", "esp:GND.2", "black", []],
+    ["pirA:OUT", "esp:32", "gold", []],
+
+    ["pirB:VCC", "esp:3V3", "red", []],
+    ["pirB:GND", "esp:GND.2", "black", []],
+    ["pirB:OUT", "esp:33", "orange", []],
+
+    ["ledVerde:A", "rVerde:1", "green", []],
+    ["rVerde:2", "esp:18", "green", []],
+    ["ledVerde:C", "esp:GND.1", "black", []],
+
+    ["ledVermelho:A", "rVermelho:1", "red", []],
+    ["rVermelho:2", "esp:19", "red", []],
+    ["ledVermelho:C", "esp:GND.1", "black", []],
+
+    ["buzzer:1", "esp:GND.1", "black", []],
+    ["buzzer:2", "esp:21", "purple", []],
+
+    ["botao:1.l", "esp:22", "blue", []],
+    ["botao:2.l", "esp:GND.2", "black", []]
+  ],
+  "dependencies": {}
+}
